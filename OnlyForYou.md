@@ -133,6 +133,35 @@ Now that we have the root folder for the web application, we can now grab the ap
 
 
 
+### Chisel
+> neo4j default part 1
+> neo4j default password
+
+> Looking for open ports (netstat -anot)
+    > only4you web login on port 8001
+        > Add another chisel connection
+
+### Add another shell after chisel
+> revshells python3 #2
+    >https://www.revshells.com/
+'''
+
+
+### Only4You
+> First we will try the default admin creds known by everyone 
+    > admin:admin
+> Success!!!
+
+
+Looking around this webpage, we can see the following
+> Dashboard
+> Employees
+- Clicking the search feature reveals employees of only4you
+
+> User Profile
+
+
+
 
 
 
