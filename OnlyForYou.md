@@ -284,6 +284,12 @@ Matching Defaults entries for john on only4you:
 User john may run the following commands on only4you:
     (root) NOPASSWD: /usr/bin/pip3 download http\://127.0.0.1\:3000/*.tar.gz
 
+### Pip download exploit
+
+
+git clone https://github.com/wunderwuzzi23/this_is_fine_wuzzi
+
+
 
 
 
