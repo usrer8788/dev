@@ -99,6 +99,12 @@ textarea.txt{min-height:110px;font-size:13px;font-family:ui-monospace,Menlo,mono
 .bar .btn{background:transparent;color:inherit;border:1px solid currentColor;min-height:36px;padding:4px 10px}
 .bar b{font:700 24px var(--display)}
 .bar.live{background:var(--card);color:var(--ink);border-top:1px solid var(--line)}
+.watch{position:relative;width:44px;height:44px;display:grid;place-items:center;border-radius:8px;background:var(--field);color:var(--muted);flex:none}
+.watch.on{color:var(--ink)}
+.watch i{position:absolute;top:7px;right:7px;width:9px;height:9px;border-radius:50%;border:2px solid var(--field);background:var(--good)}
+.watch.err i{background:var(--bad)} .watch.busy i{background:var(--accent)}
+.steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:8px}
+a{color:var(--accent-ink)}
 .scrim{position:absolute;inset:0;background:rgba(0,0,0,.45);z-index:20;display:flex;align-items:flex-end}
 .sheet{width:100%;background:var(--card);border-radius:12px 12px 0 0;padding-block:14px 18px;display:flex;flex-direction:column;gap:6px;max-height:80%;overflow-y:auto}
 .sheet .btn{justify-content:flex-start}
@@ -298,6 +304,89 @@ function findPRs(w){
 }
 const prText = p => p.kind === 'Most reps' ? p.val + ' reps' : p.kind === 'Longest time' ? clock(p.val) : p.kind === 'Longest distance' ? dd(p.val) + ' ' + dunit() : big(wd(p.val)) + ' ' + unit();
 
+/* ---------- Garmin heart rate (Personal API, reached through the Android app) ---------- */
+const GK = 'chalklog.garmin';
+const G = {avail: !!(window.ChalkNative && window.ChalkNative.garminRequest), hasKey:false, busy:false, err:'', last:null, tried:0};
+try { G.last = JSON.parse(localStorage.getItem(GK) || '{}').last || null; } catch(e){}
+const gPending = {};
+window.__chalkNative = (id, status, body) => { const f = gPending[id]; if (f){ delete gPending[id]; f({status, body}); } };
+window.__chalkBack = () => { if (ui.sheet){ ui.sheet = null; render(); return true; } if (ui.stack.length){ ui.stack.pop(); render(); return true; } return false; };
+const gGet = path => new Promise(res => { const id = uid(); gPending[id] = res;
+  try { window.ChalkNative.garminRequest(id, path); } catch(e){ delete gPending[id]; res({status:0, body:String(e)}); }
+  setTimeout(() => { if (gPending[id]){ delete gPending[id]; res({status:0, body:'timeout'}); } }, 30000); });
+function gStatus(){ if (!G.avail) return; try { G.hasKey = !!JSON.parse(window.ChalkNative.garminStatus()).hasKey; } catch(e){ G.hasKey = false; } }
+const localDate = t => { const d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); };
+function parseHR(j){
+  let ti = 0, hi = 1;
+  (j.heartRateValueDescriptors || []).forEach(d => { if (/time/i.test(d.key)) ti = d.index; if (/heart/i.test(d.key)) hi = d.index; });
+  return (j.heartRateValues || []).map(v => [+v[ti], +v[hi]]).filter(v => v[0] > 0 && v[1] > 0).map(v => [v[0] < 1e11 ? v[0]*1000 : v[0], v[1]]);
+}
+const gErr = r => r.status === 401 || r.status === 403 ? 'Garmin rejected the key. It may have expired or been deleted. Create a new key and connect again.'
+  : r.status === 0 ? 'Could not reach Garmin. Check your connection and try again.' : 'Garmin returned an error (' + r.status + '). Try again later.';
+async function syncWorkoutHR(w){
+  const dates = [...new Set([localDate(w.start), localDate(w.end)])]; let all = [];
+  for (const d of dates){
+    const r = await gGet('/wellness-service/wellness/dailyHeartRate?date=' + d);
+    if (r.status !== 200){ G.err = gErr(r); return 'error'; }
+    try { all = all.concat(parseHR(JSON.parse(r.body))); } catch(e){ G.err = 'Garmin sent heart rate data this app could not read.'; return 'error'; }
+  }
+  G.err = '';
+  let pts = all.filter(v => v[0] >= w.start && v[0] <= w.end).sort((a,b) => a[0]-b[0]);
+  if (!pts.length) return 'none';
+  const bpm = pts.map(p => p[1]), step = Math.ceil(pts.length/400);
+  w.hr = {avg:Math.round(bpm.reduce((a,b) => a+b, 0)/bpm.length), max:Math.max(...bpm), min:Math.min(...bpm), n:pts.length, at:Date.now(),
+    samples:pts.filter((_,i) => i % step === 0).map(p => [Math.round((p[0]-w.start)/1000), p[1]])};
+  persist(monthKey(w.start));
+  return 'ok';
+}
+async function syncRecent(manual){
+  if (!G.avail || !G.hasKey || G.busy) return;
+  if (!manual && Date.now() - G.tried < 5*60000) return;
+  G.tried = Date.now();
+  const todo = state.workouts.filter(w => !w.hr && w.end > Date.now() - 7*864e5);
+  G.busy = true; if (manual) render();
+  let got = 0;
+  for (const w of todo){ const r = await syncWorkoutHR(w); if (r === 'ok') got++; if (r === 'error') break; }
+  G.busy = false;
+  if (!G.err){ G.last = Date.now(); try { localStorage.setItem(GK, JSON.stringify({last:G.last})); } catch(e){} }
+  G.note = G.err ? '' : todo.length === 0 ? 'Every recent workout already has heart rate.' : got ? `Added heart rate to ${got} workout${got>1?'s':''}.` : 'No heart rate for your recent workouts on Garmin yet. Sync your watch in Garmin Connect, then try again.';
+  if (manual || got || G.err) render();
+}
+const WATCH = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6.5" width="12" height="11" rx="3.5"/><path d="M9 6.5l.7-4h4.6l.7 4M9 17.5l.7 4h4.6l.7-4M12 9.8v2.4l1.5 1"/></svg>';
+const watchBtn = () => `<button class="watch ${G.hasKey ? 'on' : ''} ${G.err ? 'err' : G.busy ? 'busy' : ''}" data-act="garmin" aria-label="Garmin watch: ${G.hasKey ? (G.err ? 'needs attention' : 'connected') : 'not connected'}">${WATCH}${G.hasKey ? '<i></i>' : ''}</button>`;
+function hrCard(w){
+  if (!w.hr) return G.hasKey ? `<div class="card col"><span class="label">Heart rate</span><span class="small muted">Nothing from Garmin for this workout yet. Heart rate arrives once your watch has synced with Garmin Connect.</span><button class="btn sm" data-act="syncOne" data-id="${w.id}">${G.busy ? 'Checking Garmin…' : 'Check Garmin now'}</button></div>` : '';
+  const h = w.hr, W = 320, H = 110, total = Math.max(1, (w.end - w.start)/1000), lo = Math.min(h.min, ...h.samples.map(s => s[1])), hi = h.max, span = hi-lo || 1;
+  const X = t => 4 + t/total*(W-8), Y = v => 18 + (1-(v-lo)/span)*(H-26);
+  const d = h.samples.map((s,i) => (i?'L':'M') + X(s[0]).toFixed(1) + ' ' + Y(s[1]).toFixed(1)).join(' ');
+  return `<div class="card col"><span class="label">Heart rate · from your Garmin watch</span>
+    <div class="row"><span class="grow"><b style="font:700 26px var(--display)">${h.avg}</b> <span class="small muted">avg bpm</span></span><span class="grow"><b style="font:700 26px var(--display)">${h.max}</b> <span class="small muted">max bpm</span></span></div>
+    ${h.samples.length > 1 ? `<svg viewBox="0 0 ${W} ${H+16}" width="100%" role="img" aria-label="Heart rate during the workout, ${h.min} to ${h.max} beats per minute">
+      <line x1="0" y1="${Y(hi)}" x2="${W}" y2="${Y(hi)}" stroke="var(--line)" stroke-dasharray="3 3"/><line x1="0" y1="${Y(lo)}" x2="${W}" y2="${Y(lo)}" stroke="var(--line)"/>
+      <text x="${W}" y="${Y(hi)-4}" text-anchor="end">${hi}</text><text x="${W}" y="${Y(lo)-4}" text-anchor="end">${lo}</text>
+      <path d="${d}" fill="none" stroke="var(--bad)" stroke-width="2" stroke-linejoin="round"/>
+      <text x="4" y="${H+12}">0:00</text><text x="${W-4}" y="${H+12}" text-anchor="end">${clock(total)}</text></svg>` : ''}
+    <span class="small muted">${h.n} reading${h.n===1?'':'s'} taken by the watch during this workout.</span></div>`;
+}
+function ovGarmin(o){
+  const body = !G.avail ? `<div class="card col"><h3>Open this in the Android app</h3><span>Garmin heart rate works in the Chalk Log Android app. A web page is not allowed to contact Garmin directly, so the watch cannot be connected from here.</span></div>`
+  : !G.hasKey ? `<div class="card col"><h3>Connect your Garmin watch</h3>
+      <span>Chalk Log reads the heart rate your watch records during each workout, using your own Garmin Connect Personal API key.</span>
+      <ol class="steps"><li>Open <a href="https://connect.garmin.com/app/settings/personalApiToken" target="_blank" rel="noopener">Garmin Connect's Personal API Key page</a> and sign in.</li>
+      <li>Choose Create Key, accept the terms, pick an expiry, then copy the key. Garmin shows it only once.</li><li>Paste it below.</li></ol>
+      <input class="txt" id="gkey" type="password" autocomplete="off" placeholder="Paste your Personal API key" value="${esc(o.key || '')}" data-in="gkey" aria-label="Garmin Personal API key">
+      <button class="btn primary" data-act="garminConnect">${G.busy ? 'Checking the key…' : 'Connect watch'}</button>
+      ${G.err ? `<span class="small" style="color:var(--bad)">${esc(G.err)}</span>` : ''}
+      <span class="small muted">The key is encrypted and stored only on this phone. It is sent to Garmin and nowhere else.</span></div>`
+  : `<div class="card col"><div class="row"><span class="watch on ${G.err ? 'err' : ''}">${WATCH}<i></i></span><span class="grow"><h3>${G.err ? 'Garmin needs attention' : 'Garmin connected'}</h3><span class="small muted">${G.last ? 'Last checked ' + new Date(G.last).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : 'Not checked yet'}</span></span></div>
+      ${G.err ? `<span class="small" style="color:var(--bad)">${esc(G.err)}</span>` : ''}${G.note ? `<span class="small">${esc(G.note)}</span>` : ''}
+      <button class="btn primary" data-act="garminSync">${G.busy ? 'Checking Garmin…' : 'Check for heart rate now'}</button>
+      <button class="btn danger" data-act="garminDisconnect">Disconnect watch</button></div>`;
+  return `<div class="overlay"><header class="pad"><button class="btn sm" data-act="back">‹ Back</button><span class="title">Garmin watch</span></header>
+    <div class="body pad">${body}
+    <div class="card col"><span class="label">How it works</span><span class="small">Wear your watch while you train. Garmin's Personal API only hands over data after the watch has synced to Garmin Connect, so heart rate shows up on a workout a few minutes after you finish, not live during it. Chalk Log checks again each time you open the app, for any workout from the last 7 days that has none.</span></div></div></div>`;
+}
+
 /* ---------- navigation ---------- */
 const top = () => ui.stack[ui.stack.length-1];
 function open(o){ ui.stack.push(o); render(); }
@@ -329,7 +418,7 @@ function finishWorkout(){
   state.workouts.unshift(w); state.workouts.sort((x,y) => y.start - x.start);
   const rid = a.routineId; state.active = null; ui.rest = null;
   persist('active', monthKey(w.start));
-  ui.stack = [{type:'summary', id:w.id, rid}]; ui.tab = 'log'; render();
+  ui.stack = [{type:'summary', id:w.id, rid}]; ui.tab = 'log'; render(); G.tried = 0; syncRecent(false);
 }
 function discard(){ state.active = null; ui.rest = null; persist('active'); ui.stack = []; }
 function startRest(sec){ if (!sec) return; ui.rest = {end:Date.now() + sec*1000, total:sec}; }
@@ -355,12 +444,12 @@ function workoutCard(w){
   const more = w.exercises.length > 3 ? `<br>+ ${w.exercises.length-3} more` : '';
   return `<button class="card col" data-act="openWorkout" data-id="${w.id}">
     <span class="row between"><h3>${esc(w.name)}</h3>${w.prs?.length ? `<span class="pr">${w.prs.length} PR${w.prs.length>1?'s':''}</span>` : ''}</span>
-    <span class="small muted">${day(w.start)} · ${dur(w.end-w.start)} · ${big(wd(volume(w)))} ${unit()} · ${setCount(w)} sets</span>
+    <span class="small muted">${day(w.start)} · ${dur(w.end-w.start)} · ${big(wd(volume(w)))} ${unit()} · ${setCount(w)} sets${w.hr ? ` · ♥ ${w.hr.avg} avg` : ''}</span>
     <span class="small">${lines}${more}</span></button>`;
 }
 function viewLog(){
   const ws = weekStart(Date.now()); const wk_ = state.workouts.filter(w => w.start >= ws);
-  return `<h1>Chalk Log</h1>
+  return `<div class="row between"><h1>Chalk Log</h1>${watchBtn()}</div>
   <div class="col"><span class="label">This week</span>
   <div class="stats"><div><b>${wk_.length}</b><span class="small muted">workouts</span></div>
   <div><b>${big(wd(wk_.reduce((a,w) => a+volume(w),0)))}</b><span class="small muted">${unit()} lifted</span></div>
@@ -370,7 +459,7 @@ function viewLog(){
     `<div class="empty">No workouts logged yet.<br>Finished sessions appear here with duration, volume and any records you set.<br><br><button class="btn primary" data-act="tab" data-tab="train">Start your first workout</button></div>`}</div>`;
 }
 function viewTrain(){
-  return `<h1>Train</h1>
+  return `<div class="row between"><h1>Train</h1>${watchBtn()}</div>
   <button class="btn primary wide" data-act="startEmpty">Start empty workout</button>
   <div class="row between"><span class="label">Routines</span><button class="btn ghost sm" data-act="newRoutine">+ New routine</button></div>
   ${state.routines.length ? state.routines.map(r => `<div class="card col">
@@ -392,7 +481,7 @@ function exFilter(){
   <div class="chips"><button class="chip" aria-pressed="${!ui.muscle}" data-act="muscle" data-m="">All</button>${MUSCLES.map(m => `<button class="chip" aria-pressed="${ui.muscle===m}" data-act="muscle" data-m="${m}">${m}</button>`).join('')}</div>`;
 }
 function viewExercises(){
-  return `<div class="row between"><h1>Exercises</h1><button class="btn ghost sm" data-act="newExercise">+ Custom</button></div>${exFilter()}<div id="exlist">${exRows(null)}</div>`;
+  return `<div class="row between"><h1 class="grow">Exercises</h1><button class="btn ghost sm" data-act="newExercise">+ Custom</button>${watchBtn()}</div>${exFilter()}<div id="exlist">${exRows(null)}</div>`;
 }
 function bars(items){
   const max = Math.max(1, ...items.map(i => i.v)), W = 320, H = 130, bw = (W-10)/items.length;
@@ -423,8 +512,8 @@ function viewProgress(){
   const cal = ui.cal || (ui.cal = new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const days = new Date(cal.getFullYear(), cal.getMonth()+1, 0).getDate(), lead = (cal.getDay()+6)%7;
   const hits = new Set(all.filter(w => { const d = new Date(w.start); return d.getFullYear()===cal.getFullYear() && d.getMonth()===cal.getMonth(); }).map(w => new Date(w.start).getDate()));
-  const syncMsg = {cloud:'Saved to your Claude account. Your log follows you to any device where you open this page signed in.', local:'Saved in this browser only. Clearing site data erases it, so keep a backup below.', error:'Could not reach your saved log. Changes are kept in this browser for now.'}[ui.sync];
-  return `<h1>Progress</h1>
+  const syncMsg = {cloud:'Saved to your Claude account. Your log follows you to any device where you open this page signed in.', local:G.avail ? 'Saved on this phone. Uninstalling the app erases it, so keep a backup below.' : 'Saved in this browser only. Clearing site data erases it, so keep a backup below.', error:'Could not reach your saved log. Changes are kept in this browser for now.'}[ui.sync];
+  return `<div class="row between"><h1>Progress</h1>${watchBtn()}</div>
   <div class="stats"><div><b>${all.length}</b><span class="small muted">workouts</span></div>
   <div><b>${big(wd(all.reduce((a,w) => a+volume(w),0)))}</b><span class="small muted">${unit()} lifted</span></div>
   <div><b>${all.reduce((a,w) => a+(w.prs?.length||0),0)}</b><span class="small muted">records set</span></div></div>
@@ -474,7 +563,7 @@ function ovActive(){
   const doneSets = a.exercises.reduce((n,e) => n + e.sets.filter(s => s.done && s.type!=='W').length, 0);
   const vol = a.exercises.reduce((n,e) => n + (EX[e.exId]?.type==='wr' ? e.sets.reduce((m,s) => m + (s.done && s.type!=='W' && s.w && s.r ? s.w*s.r : 0),0) : 0),0);
   return `<div class="overlay"><header class="pad"><button class="btn sm" data-act="minimize" aria-label="Minimise workout">⌄</button>
-    <span class="title"><span id="elapsed">${clock((Date.now()-a.start)/1000)}</span></span><button class="btn primary sm" data-act="finish">Finish</button></header>
+    <span class="title"><span id="elapsed">${clock((Date.now()-a.start)/1000)}</span></span><button class="btn primary sm" data-act="finish">Finish</button>${watchBtn()}</header>
   <div class="body pad"><input class="txt" id="wname" value="${esc(a.name)}" data-in="wname" aria-label="Workout name" style="font:700 22px var(--display)">
     <div class="row small muted"><span id="livestats">${doneSets} sets · ${big(wd(vol))} ${unit()}</span></div>
     ${a.exercises.map((e,i) => exBlock('a', e, i)).join('') || `<div class="empty">Add an exercise to begin. Each set shows what you did last time so you know what to beat.</div>`}
@@ -500,7 +589,7 @@ function ovRoutine(){
     <button class="btn wide" data-act="addExercise" data-ctx="r">+ Add exercise</button></div></div>`;
 }
 function workoutBody(w){
-  return `${w.prs?.length ? `<div class="card col"><span class="label">Records set</span>${w.prs.map(p => `<div class="row small"><span class="pr">PR</span><span class="grow">${esc(EX[p.exId]?.name || '')} · ${p.kind}</span><b>${prText(p)}</b></div>`).join('')}</div>` : ''}
+  return `${hrCard(w)}${w.prs?.length ? `<div class="card col"><span class="label">Records set</span>${w.prs.map(p => `<div class="row small"><span class="pr">PR</span><span class="grow">${esc(EX[p.exId]?.name || '')} · ${p.kind}</span><b>${prText(p)}</b></div>`).join('')}</div>` : ''}
     ${w.exercises.map(e => { const x = EX[e.exId]; let n = 0; return `<section class="col" style="gap:4px"><button class="ex name" data-act="openExercise" data-id="${e.exId}">${esc(x?.name || 'Removed exercise')}</button>
       ${e.note ? `<span class="small muted">${esc(e.note)}</span>` : ''}
       ${e.sets.map(s => `<div class="row small"><b class="sn ${s.type}" style="width:28px;height:auto;font-size:16px">${s.type==='N' ? ++n : s.type}</b><span>${setText(s, x?.type || 'wr')}</span></div>`).join('')}</section>`; }).join('')}`;
@@ -576,7 +665,7 @@ function render(){
   const o = top();
   const view = {log:viewLog, train:viewTrain, exercises:viewExercises, progress:viewProgress}[ui.tab]();
   const overlay = !o ? '' : o.type==='active' ? ovActive() : o.type==='picker' ? ovPicker(o) : o.type==='routine' ? ovRoutine() : o.type==='workout' ? ovWorkout(o)
-    : o.type==='summary' ? ovSummary(o) : o.type==='exercise' ? ovExercise(o) : o.type==='newex' ? ovNewEx(o) : o.type==='plates' ? ovPlates(o) : '';
+    : o.type==='summary' ? ovSummary(o) : o.type==='exercise' ? ovExercise(o) : o.type==='newex' ? ovNewEx(o) : o.type==='plates' ? ovPlates(o) : o.type==='garmin' ? ovGarmin(o) : '';
   const a = state.active;
   const live = a && !ui.stack.some(s => s.type==='active') ? `<button class="bar live pad" data-act="resume"><span class="grow"><span class="small muted">Workout in progress</span><br><b>${esc(a.name)}</b></span><span class="btn primary sm"><span id="elapsed">${clock((Date.now()-a.start)/1000)}</span></span></button>` : '';
   const sh = ui.sheet ? `<div class="scrim" data-act="sheetClose"><div class="sheet pad" role="dialog" aria-label="${esc(ui.sheet.title)}"><span class="label">${esc(ui.sheet.title)}</span>${ui.sheet.items.map((it,i) => `<button class="btn ${it.danger?'danger':''}" data-act="sheetPick" data-i="${i}">${esc(it.label)}</button>`).join('')}</div></div>` : '';
@@ -696,6 +785,18 @@ const A = {
       const {app, v, ...rest} = data; state = normalize({...rest, active:state.active}); rebuildEX();
       persist('settings','routines', ...old, ...state.workouts.map(w => monthKey(w.start)));
     }); return false; },
+  garmin(){ if (top()?.type !== 'garmin') ui.stack.push({type:'garmin', key:''}); },
+  garminConnect(){
+    const key = (top().key || '').trim(); if (!key){ G.err = 'Paste your key first.'; return; }
+    window.ChalkNative.garminSetKey(key); G.busy = true; G.err = '';
+    gGet('/userprofile-service/userprofile/settings').then(r => { G.busy = false;
+      if (r.status === 200){ G.hasKey = true; G.note = ''; top().key = ''; render(); syncRecent(true); }
+      else { window.ChalkNative.garminClearKey(); G.hasKey = false; G.err = gErr(r); render(); } });
+  },
+  garminSync(){ syncRecent(true); return false; },
+  garminDisconnect(){ confirmSheet('Disconnect your Garmin watch? Heart rate already saved on workouts stays.', 'Disconnect watch', () => { window.ChalkNative.garminClearKey(); G.hasKey = false; G.err = ''; G.note = ''; }); return false; },
+  syncOne(el){ const w = state.workouts.find(w => w.id === el.dataset.id); if (!w || G.busy) return false; G.busy = true; render();
+    syncWorkoutHR(w).then(() => { G.busy = false; render(); }); return false; },
   sheetPick(el){ const it = ui.sheet.items[+el.dataset.i]; ui.sheet = null; it.fn(); },
   sheetClose(el, ev){ if (ev.target !== el) return false; ui.sheet = null; },
 };
@@ -715,6 +816,7 @@ document.addEventListener('input', ev => {
   else if (k === 'wname'){ state.active.name = el.value; persist('active'); }
   else if (k === 'rname'){ ui.draft.name = el.value; }
   else if (k === 'search'){ ui.q = el.value; const o = top(); document.getElementById('exlist').innerHTML = exRows(o?.type === 'picker' ? o.sel : null); }
+  else if (k === 'gkey'){ top().key = el.value; }
   else if (k === 'newex'){ top()[el.dataset.k] = el.value; }
   else if (k === 'plates'){ top().target = parseFloat(el.value.replace(',', '.')) || 0; document.getElementById('pl-out').innerHTML = platesOut(top()); }
 });
@@ -726,7 +828,10 @@ if (local) state = local; else { state.routines = starter(); }
 rebuildEX();
 const h = (location.hash || '').slice(1); if (['log','train','exercises','progress'].includes(h)) ui.tab = h;
 if (state.active) ui.stack = [];
+gStatus();
 render();
 connect();
+syncRecent(false);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) syncRecent(false); });
 })();
 </script>

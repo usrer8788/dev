@@ -1,0 +1,9 @@
+<resources>
+    <color name="slate">#151C1A</color>
+    <color name="saffron">#F0B634</color>
+    <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/slate</item>
+        <item name="android:statusBarColor">@color/slate</item>
+        <item name="android:navigationBarColor">@color/slate</item>
+    </style>
+</resources>
